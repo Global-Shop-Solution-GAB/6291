@@ -1,0 +1,118 @@
+﻿Program.Sub.Preflight.Start
+V.Global.iCon.Declare(long, 0)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+'TJS. Mar 2021
+'Brunswick Steel
+'BUSINESS CASE: The customer is having issues with PO conversion factors when purchasing LBs and stocking in EA because the conversion factor does not go out far in enough in decimals, and math simply won’t yield the correct result. Example: Inventory Part XYZ has a weight of 880 lbs. The conversion factor should be .00113636363636 but that doesn’t fit in the screen, and even if it does, because it is a repeating number, the purchasing qty will never be whole. When they input on the PO Lines screen a Inventory Qty of 1, the PO conversion factor doesn’t populate the correct purchasing qty, so the customer has to manually type in the correct qty for each line item like this.
+'SOLUTION: We are going to create a GAB script that will look at the Inventory Qty on the PO line screen and multiply it by the WEIGHT field on the inventory master screen, if the purchasing unit of measure is LBs, to populate the accurate purchasing quantity. This script will be placed on the SAVE button on the PO lines screen.  Additionally, they have requested that when the purchasing unit of measure is "FT" to do the same however multiple by the Consumption Conversion Factor 
+
+'Hook 17060 - PO Line PreSave
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,"17060","AND",V.Passed.000131,<>,"Y")
+	F.Intrinsic.Control.If(V.Passed.000063,=,"N")
+		F.Intrinsic.Control.If(V.Passed.000020,=,"LB","OR",V.Passed.000020,=,"FT")
+			F.Intrinsic.Control.CallSub(InvData)		
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.InvData.Start
+F.Intrinsic.Control.Try
+V.Local.sPart.Declare
+V.Local.sReV.Declare
+V.Local.sLoc.Declare
+V.Local.fInvQty.Declare
+V.Local.fWgt.Declare
+V.Local.iRet.Declare(Long)
+V.Local.fNewQty.Declare
+V.Local.fConvFact.Declare
+V.Local.fQtyOrd.Declare
+V.Local.sPONum.Declare
+V.Local.sPOLine.Declare
+V.Local.sSQL.Declare
+
+V.Local.sPart.Set(V.Passed.000008)
+V.Local.sReV.Set(V.Passed.000009)
+V.Local.sLoc.Set(V.Passed.000011)
+V.Local.fInvQty.Set(V.Passed.000024)
+V.Local.fQtyOrd.Set(V.Passed.000021)
+V.Local.sPONum.Set(V.Passed.008002)
+V.Local.sPOLine.Set(V.Passed.008001)
+
+F.Global.Object.CreateDB("GlobalDB",V.Caller.CompanyCode,V.Ambient.DBServerName,V.Global.iCon)
+F.Global.Object.Create("oPart", "Inventory.Part","GlobalDB", V.Global.iCon)
+
+F.Global.Object.SetValue("oPart", "PartNumber", V.Local.sPart)
+F.Global.Object.SetValue("oPart", "PartNumberRevision", V.Local.sRev)
+F.Global.Object.SetValue("oPart", "LocationCode", V.Local.sLoc)
+F.Global.Object.Load("oPart", 1378, V.local.iRet)
+
+F.Intrinsic.Control.SelectCase(V.Passed.000020)
+	F.Intrinsic.Control.Case("LB")
+		V.Local.fWgt.Set(V.Object.oPart(0).PhysicalProperty.Weight!FieldValFloat)
+		F.Intrinsic.Math.Mult(V.Local.fInvQty,V.Local.fWgt,V.Local.fNewQty)
+	F.Intrinsic.Control.Case("FT")
+		V.Local.fConvFact.Set(V.Object.oPart(0).Manufacturing.Consumption.ConversionFactor!FieldValFloat)
+		F.Intrinsic.Control.If(V.Local.fConvFact,=,0.0)
+			V.Local.fConvFact.Set(1.0)
+		F.Intrinsic.Control.EndIf
+		F.Intrinsic.Math.Mult(V.Local.fInvQty,V.Local.fConvFact,V.Local.fNewQty)
+F.Intrinsic.Control.EndSelect
+
+'An attempt was made
+'F.Global.Object.Create("oPOLine","Purchasing.PurchaseOrderLine","GlobalDB",V.Global.iCon)
+'F.Global.Object.SetValue("oPOLine","PurchaseOrderNumber",V.Local.sPONum.Trim)
+'F.Global.Object.SetValue("oPOLine","PurchaseOrderLineNumber",V.Local.sPOLine.Trim)
+'F.Global.Object.Load("oPOLine", 57,V.Local.iRet)
+
+'F.Global.Object.SetValue("oPOLine","Information.OverrideConversion",True)
+'F.Global.Object.SetValue("oPOLine","Inventory.Quantity.Ordered",V.Local.fInvQty)
+'F.Global.Object.SetValue("oPOLine","Purchasing.Quantity.Ordered",V.Local.fNewQty)
+'F.Global.Object.Update("oPOLine",V.Local.iRet)
+
+'Different method - did not work as core program reverts the data.
+'F.ODBC.Connection!conts.OpenCompanyConnection
+
+'F.Intrinsic.String.Build("Update PO_LINES set OVERRIDE_CONV = 'Y',QTY_ALT_ORDER = '{0}',QTY_ORDER = '{1}' where PURCHASE_ORDER = '{2}' and RECORD_NO = '{3}'",V.Local.fInvQty,V.Local.fNewQty,V.Local.sPONum.Trim,V.Local.sPOLine.Trim,V.Local.sSQL)
+
+'F.ODBC.Connection!conts.Execute(V.Local.sSQL)
+
+'F.ODBC.Connection!conts.Close
+
+'Setting Purchasing quantity and override - This will only work if Purchasing Conversion Factor is set to null in favor of the Weight field in Inventory Master
+F.Intrinsic.Control.If(V.Passed.000020.Trim,<>,V.Passed.000023.Trim)
+	V.Passed.000063.Set("Y")
+	V.Passed.000021.Set(V.Local.fNewQty)
+	V.Passed.000024.Set(V.Local.fInvQty)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.InvData.End
+
+Program.Sub.Error.Start
+V.Local.sError.Declare
+V.Local.iRet.Declare
+V.Local.sSep.Declare
+
+F.Intrinsic.String.Build("-------------------------------------------------------------------------------------",,V.Local.sSep)
+F.Intrinsic.String.Build("({5}-{6}){0}{7}{0}Project: {4}{0}{7}{0}Sub: {1}{0}Error: {2}, {3}", V.Ambient.NewLine, V.Args.SubRoutine, V.Args.eNumber, V.Args.eDescription,V.Caller.ScriptFile,V.Ambient.Date, V.Ambient.Time,V.Local.sSep,V.Local.sError)
+F.Intrinsic.UI.Msgbox(V.Local.sError,"Error",V.Local.iRet)
+Program.Sub.Error.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$tsmith$}$20210323133032753$}$xqPbj9atw05FglvzeFsZ9cqXP+qvG6tXysT023z9yhj4VvDu4Qtf9H9jI+5+AM+gnAakOiXJu/8=
+Program.Sub.Comments.End
